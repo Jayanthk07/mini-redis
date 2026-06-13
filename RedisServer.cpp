@@ -24,7 +24,7 @@ void RedisServer::start(){
 
         thread t([clientFd,this](){
             ClientHandler handler(clientFd,store);
-            handler.Handle();
+            handler.handle();
         });
         t.detach();
     }

@@ -8,6 +8,6 @@ private:
     Store& store;
 public:
     ClientHandler(int clientFd,Store& store);
-    void Handle();
+    void handle();
 
 };
