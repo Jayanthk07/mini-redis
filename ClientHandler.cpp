@@ -53,7 +53,30 @@ void ClientHandler::handle(){
             }else{
                 response = ":0\r\n";
             }
-        }else{
+        }
+        else if (cmd[0] == "LPUSH") {
+            store.lpush(cmd[1], cmd[2]);
+            response = ":" + to_string(store.llen(cmd[1])) + "\r\n";
+        }
+        else if (cmd[0] == "RPUSH") {
+            store.rpush(cmd[1], cmd[2]);
+            response = ":" + to_string(store.llen(cmd[1])) + "\r\n";
+        }
+        else if (cmd[0] == "LLEN") {
+            response = ":" + to_string(store.llen(cmd[1])) + "\r\n";
+        }
+        else if (cmd[0] == "LRANGE") {
+            vector<string> vals = store.lrange(cmd[1], stoi(cmd[2]), stoi(cmd[3]));
+            response = "*" + to_string(vals.size()) + "\r\n";
+            for (const string& v : vals) {
+                response += "$" + to_string(v.size()) + "\r\n" + v + "\r\n";
+            }
+        }
+        else if (cmd[0] == "LREM") {
+            store.lrem(cmd[1], stoi(cmd[2]), cmd[3]);
+            response = "+OK\r\n";
+        }
+        else{
             response = "-ERR unknown command\r\n";
         }
 
