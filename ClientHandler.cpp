@@ -19,7 +19,7 @@ void ClientHandler::handle(){
         vector<string>cmd = CommandParser::parse(raw);
 
         if(cmd.empty()) continue;
-
+        transform(cmd[0].begin(), cmd[0].end(), cmd[0].begin(), ::toupper);
         string response;
 
         if(cmd[0] == "PING"){
