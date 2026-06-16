@@ -5,7 +5,7 @@
 #include "CommandParser.h"
 using namespace std;
 
-ClientHandler::ClientHandler(int clientFd,Store&store):clientFd(clientFd),store(store){}
+ClientHandler::ClientHandler(int clientFd,Store&store,RedisServer&server):clientFd(clientFd),store(store),server(server){}
 
 void ClientHandler::handle(){
     char buffer[1024];
@@ -36,6 +36,7 @@ void ClientHandler::handle(){
                 store.setExpiry(cmd[1],ms);
             }
             response = "+OK\r\n";
+            if(server.getIsMaster()) server.propagate(raw);
         }else if(cmd[0] == "GET"){
             string val = store.get(cmd[1]);
             if(val.empty()){
@@ -46,7 +47,7 @@ void ClientHandler::handle(){
         }else if(cmd[0] == "DEL"){
             store.del(cmd[1]);
             response = ":1\r\n";
-
+            if(server.getIsMaster()) server.propagate(raw);
         }else if(cmd[0]=="EXISTS"){
             if(store.exists(cmd[1])){
                 response = ":1\r\n";
@@ -57,10 +58,12 @@ void ClientHandler::handle(){
         else if (cmd[0] == "LPUSH") {
             store.lpush(cmd[1], cmd[2]);
             response = ":" + to_string(store.llen(cmd[1])) + "\r\n";
+            if(server.getIsMaster()) server.propagate(raw);
         }
         else if (cmd[0] == "RPUSH") {
             store.rpush(cmd[1], cmd[2]);
             response = ":" + to_string(store.llen(cmd[1])) + "\r\n";
+            if(server.getIsMaster()) server.propagate(raw);
         }
         else if (cmd[0] == "LLEN") {
             response = ":" + to_string(store.llen(cmd[1])) + "\r\n";
@@ -75,6 +78,7 @@ void ClientHandler::handle(){
         else if (cmd[0] == "LREM") {
             store.lrem(cmd[1], stoi(cmd[2]), cmd[3]);
             response = "+OK\r\n";
+            if(server.getIsMaster()) server.propagate(raw);
         }
         else{
             response = "-ERR unknown command\r\n";

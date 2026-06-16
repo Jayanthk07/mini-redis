@@ -2,10 +2,10 @@
 #include <string>
 using namespace std;
 
-void Store::set(const string &key, const string &value)
-{
+void Store::set(const string &key, const string &value) {
     lock_guard<mutex> lock(mtx);
-    StringValue*sv = new StringValue;
+    
+    StringValue* sv = new StringValue;
     sv->value = value;
     data[key] = sv;
 }
@@ -13,17 +13,16 @@ void Store::set(const string &key, const string &value)
 string Store::get(const string &key)
 {
     lock_guard<mutex> lock(mtx);
-
+    
     if(expiry.find(key) != expiry.end() && chrono::steady_clock::now()>expiry[key]){
         data.erase(key);
         expiry.erase(key);
         return "";
     }
-    if (data.find(key) == data.end()) return "";  // check FIRST
+    if (data.find(key) == data.end()) return "";
     StringValue*sv = dynamic_cast<StringValue*>(data[key]);
     if(!sv) return "";
     return sv->value;
-
 }
 
 void Store::del(const string&key){
