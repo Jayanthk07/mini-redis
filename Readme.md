@@ -36,7 +36,7 @@ redis-cli GET name → Replica (:6380) → "Jayanth"
 ## Features
 
 - TCP server with one thread per client connection
-- RESP protocol parser (strips `*` and `$` framing lines)
+- RESP protocol parser (length-prefixed, binary-safe — reads declared `$<len>` byte counts rather than scanning for markers)
 - Commands: `PING`, `ECHO`, `SET`, `GET`, `DEL`, `EXISTS`, `EXPIRE`
 - List commands: `LPUSH`, `RPUSH`, `LRANGE`, `LLEN`, `LREM`
 - Polymorphic `DataType` base class with `StringValue` and `ListValue` subtypes
@@ -127,18 +127,41 @@ redis-cli -p 6380 GET name    # returns "Jayanth"
 
 ## Benchmark
 
-Tested with `redis-benchmark -p 6379 -t set,get -n 10000`:
+Tested with `redis-benchmark` on native Linux (Dell G15, Ubuntu 22.04) — not Docker/WSL.
 
-```
-Throughput: 3,745 requests/sec
-Avg latency: 4.992ms
-p99 latency: 0.151ms
-```
+**Core commands** (`-n 100000 -c 50`):
 
-Bottleneck: one mutex per Store operation. A future optimization would be `std::shared_mutex` to allow concurrent reads, or a single-threaded event loop (epoll) like real Redis uses — eliminating locking overhead entirely.
+| Command | Throughput (req/s) | p50 latency |
+|---|---|---|
+| PING | ~206,000 | 0.023ms |
+| SET | ~208,000 | 0.023ms |
+| GET | ~200,000 | 0.023ms |
+| LPUSH | ~205,000 | 0.023ms |
+| RPUSH | ~205,000 | 0.023ms |
+
+**Concurrency scaling** (`SET`/`GET`, `-n 100000`):
+
+| Concurrent clients | Throughput (req/s) |
+|---|---|
+| 1 | ~71,000 |
+| 10 | ~220,000 |
+| 50 | ~209,000 |
+| 200 | ~215,000 |
+
+Throughput scales sharply from 1→10 concurrent clients (single-connection requests are latency-bound), then plateaus — the single `std::mutex` guarding `Store` becomes the limiting factor beyond ~10 concurrent clients rather than raw CPU capacity.
+
+**Payload handling**: verified with a 1024-byte payload (`-d 1024`) after fixing the fixed-size read buffer and moving to length-prefixed RESP parsing — see Known Limitations.
+
+**Bottleneck**: one mutex per `Store` operation. A future optimization would use `std::shared_mutex` for concurrent reads, or a single-threaded event loop (epoll) like real Redis — eliminating locking overhead entirely.
 
 ---
+## Known Limitations
 
+- **No streaming/partial-read support**: `ClientHandler` assumes one `recv()` call contains exactly one complete RESP command. Large payloads or commands split across multiple TCP reads aren't reassembled — the server responds with a protocol error rather than corrupting state. Proper fix requires a persistent per-connection buffer that accumulates bytes until a full command is parseable.
+- **No command pipelining**: follows from the above — multiple commands sent back-to-back without waiting for individual replies aren't currently supported.
+- **Type-mismatch errors are shallow**: `WRONGTYPE` is detected via a length-comparison workaround in `ClientHandler` rather than a clean type check surfaced from the `Store` layer.
+
+---
 ## Design Tradeoffs
 
 **One thread per client vs event loop:**
@@ -165,7 +188,10 @@ No persistence. All data is lost on restart. A production system would use RDB s
 | `accept()` crash on bad connection | No error handling | Changed to `continue` on `accept()` failure instead of crashing |
 | Commands not matching (`ping` vs `PING`) | `redis-cli` sends lowercase, code checked uppercase | Added `transform` to uppercase `cmd[0]` after parsing |
 | Replica receiving SET twice | `propagate()` called before checking `isMaster` | Added `getIsMaster()` check before every `propagate()` call |
-
+| Server crash on binary payloads (e.g. `redis-benchmark -d 1024`) | Parser scanned for `*`/`$` bytes anywhere in the line instead of trusting RESP's declared length prefix — binary payload bytes could collide with those markers, causing token count mismatch and out-of-bounds vector access | Rewrote parser to read declared `$<len>` byte counts directly (length-prefixed, binary-safe) instead of scanning content |
+| Crash on malformed/incomplete commands | No bounds checking before indexing `cmd[1]`, `cmd[2]`, etc. in `ClientHandler` | Added argument-count guards before every command handler; returns `-ERR wrong number of arguments` instead of crashing |
+| `LPUSH`/`RPUSH` on a non-list key crashed | `dynamic_cast<ListValue*>` result never null-checked before dereferencing | Added null check; returns `WRONGTYPE` error instead of crashing |
+| Memory leak on key overwrite | `Store::set` allocated a new `DataType*` without freeing the previous value at that key | `delete` old pointer before overwriting map entry |
 ---
 
 ## What I Learned
@@ -177,3 +203,4 @@ No persistence. All data is lost on restart. A production system would use RDB s
 - Why `shared_mutex` matters for read-heavy workloads
 - How master-replica replication works and the CAP theorem tradeoffs it involves
 - Why real Redis uses a single-threaded event loop instead of threads
+- Why RESP's explicit length-prefixing exists — a naive parser that scans for `*`/`$` markers breaks the moment binary payload data collides with those bytes; length-prefixing avoids ambiguity entirely

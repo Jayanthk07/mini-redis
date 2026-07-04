@@ -4,7 +4,8 @@ using namespace std;
 
 void Store::set(const string &key, const string &value) {
     lock_guard<mutex> lock(mtx);
-    
+    auto it = data.find(key);
+    if(it != data.end()) delete it->second; // free old value before overwrite
     StringValue* sv = new StringValue;
     sv->value = value;
     data[key] = sv;
@@ -51,12 +52,14 @@ bool Store::isExpired(const string&key){
     return chrono::steady_clock::now() >expiry[key];
 }
 
+
 void Store::lpush(const string&key,const string&val){
     lock_guard<mutex> lock(mtx);
     if(data.find(key)== data.end()){
-        data[key] = new Listvalue();
-    }
+    data[key] = new Listvalue();
+        }
     Listvalue*lv = dynamic_cast<Listvalue*>(data[key]);
+    if(!lv) return; // TODO: return WRONGTYPE error to client instead of silently no-op'ing
     lv->values.push_front(val);
 }
 
@@ -67,6 +70,7 @@ void Store::rpush(const string&key,const string&val){
         data[key] = new Listvalue();
     }
     Listvalue*rv = dynamic_cast<Listvalue*>(data[key]);
+    if(!rv) return;
     rv->values.push_back(val);
 }
 
