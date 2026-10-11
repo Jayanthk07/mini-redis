@@ -1,8 +1,7 @@
 #pragma once
-#include<bits/stdc++.h>
+#include <bits/stdc++.h>
 using namespace std;
-
-class CommandParser{
+class CommandParser {
 public:
-    static vector<string> parse(const string&raw);
+    static pair<vector<string>, size_t> parse(const string &raw);
 };

@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  redis-master:
+    build: .
+    container_name: mini-redis-master
+    ports:
+      - "6379:6379"
+    command: ["./redis-server", "--port", "6379", "--master"]
+
+  redis-replica:
+    build: .
+    container_name: mini-redis-replica
+    ports:
+      - "6380:6380"
+    command: ["./redis-server", "--port", "6380", "--replica", "6379"]
+    depends_on:
+      - redis-master

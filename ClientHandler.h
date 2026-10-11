@@ -1,13 +1,9 @@
 #pragma once
-#include"Store.h"
+#include "Store.h"
 #include "RedisServer.h"
+#include <string>
 
-class ClientHandler{
-private:
-    int clientFd;
-    Store& store;
-    RedisServer&server;
+class ClientHandler {
 public:
-    ClientHandler(int clientFd,Store& store,RedisServer&server);
-    void handle();
+    static void handle(int clientFd, std::string& buffer, Store& store, RedisServer& server);
 };

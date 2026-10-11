@@ -1,20 +1,28 @@
 #include "ClientHandler.h"
-#include<bits/stdc++.h>
-#include<sys/socket.h>
-#include<unistd.h>
+#include <bits/stdc++.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include "CommandParser.h"
 using namespace std;
 
-ClientHandler::ClientHandler(int clientFd,Store&store,RedisServer&server):clientFd(clientFd),store(store),server(server){}
+static bool safeStoi(const string& s, int& out) {
+    try {
+        out = stoi(s);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 
-void ClientHandler::handle(){
-    char buffer[8192];
-    while(true){
-        int bytesRead = recv(clientFd, buffer, sizeof(buffer), 0);
-        if(bytesRead <= 0){ close(clientFd); break; }
-        string raw(buffer, bytesRead);
-        vector<string> cmd = CommandParser::parse(raw);
-        if(cmd.empty()) continue;
+void ClientHandler::handle(int clientFd, string& buffer, Store& store, RedisServer& server) {
+    while (!buffer.empty()) {
+        auto [cmd, consumed] = CommandParser::parse(buffer);
+        if (consumed == 0 || cmd.empty()) {
+            break; 
+        }
+        string raw = buffer.substr(0, consumed);
+        buffer.erase(0, consumed);
+
         transform(cmd[0].begin(), cmd[0].end(), cmd[0].begin(), ::toupper);
         string response;
 
@@ -32,7 +40,13 @@ void ClientHandler::handle(){
             else {
                 store.set(cmd[1], cmd[2]);
                 if(cmd.size() > 4 && (cmd[3] == "EX" || cmd[3] == "PX")){
-                    int ms = (cmd[3] == "EX") ? stoi(cmd[4]) * 1000 : stoi(cmd[4]);
+                    int ms;
+                    if(!safeStoi(cmd[4], ms)){
+                        response = "-ERR value is not an integer or out of range\r\n";
+                        send(clientFd, response.c_str(), response.size(), 0);
+                        continue;
+                    }
+                    ms = (cmd[3] == "EX") ? ms * 1000 : ms;
                     store.setExpiry(cmd[1], ms);
                 }
                 response = "+OK\r\n";
@@ -48,7 +62,11 @@ void ClientHandler::handle(){
         }
         else if(cmd[0] == "DEL"){
             if(!need(2)) response = "-ERR wrong number of arguments\r\n";
-            else { store.del(cmd[1]); response = ":1\r\n"; if(server.getIsMaster()) server.propagate(raw); }
+            else {
+                bool deleted = store.del(cmd[1]);
+                response = deleted ? ":1\r\n" : ":0\r\n";
+                if(deleted && server.getIsMaster()) server.propagate(raw);
+            }
         }
         else if(cmd[0] == "EXISTS"){
             if(!need(2)) response = "-ERR wrong number of arguments\r\n";
@@ -75,14 +93,26 @@ void ClientHandler::handle(){
         else if(cmd[0] == "LRANGE"){
             if(!need(4)) response = "-ERR wrong number of arguments\r\n";
             else {
-                vector<string> vals = store.lrange(cmd[1], stoi(cmd[2]), stoi(cmd[3]));
-                response = "*" + to_string(vals.size()) + "\r\n";
-                for(const string& v : vals) response += "$" + to_string(v.size()) + "\r\n" + v + "\r\n";
+                int start, end;
+                if(!safeStoi(cmd[2], start) || !safeStoi(cmd[3], end)){
+                    response = "-ERR value is not an integer or out of range\r\n";
+                } else {
+                    vector<string> vals = store.lrange(cmd[1], start, end);
+                    response = "*" + to_string(vals.size()) + "\r\n";
+                    for(const string& v : vals) response += "$" + to_string(v.size()) + "\r\n" + v + "\r\n";
+                }
             }
         }
         else if(cmd[0] == "LREM"){
             if(!need(4)) response = "-ERR wrong number of arguments\r\n";
-            else { store.lrem(cmd[1], stoi(cmd[2]), cmd[3]); response = "+OK\r\n"; if(server.getIsMaster()) server.propagate(raw); }
+            else {
+                int count;
+                if(!safeStoi(cmd[2], count)){
+                    response = "-ERR value is not an integer or out of range\r\n";
+                } else {
+                    store.lrem(cmd[1], count, cmd[3]); response = "+OK\r\n"; if(server.getIsMaster()) server.propagate(raw);
+                }
+            }
         }
         else{
             response = "-ERR unknown command\r\n";

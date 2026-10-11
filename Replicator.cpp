@@ -30,23 +30,29 @@ void Replicator::connectToMaster(){
     }
     cout<<"Connected to master on port "<<masterPort<<endl;
 }
+
 void Replicator::listenForCommands() {
-    char buffer[1024];
+    char buffer[4096];
+    string dataBuffer;
     while (true) {
         int bytesRead = recv(masterFd, buffer, sizeof(buffer), 0);
         if (bytesRead <= 0) break;
         
-        string raw(buffer, bytesRead); 
-        vector<string> cmd = CommandParser::parse(raw);
-        if (cmd.empty()) continue;
+        dataBuffer.append(buffer, bytesRead);
         
-        transform(cmd[0].begin(), cmd[0].end(), cmd[0].begin(), ::toupper);
-        
-        if (cmd[0] == "SET") store.set(cmd[1], cmd[2]);
-        else if (cmd[0] == "DEL") store.del(cmd[1]);
-        else if (cmd[0] == "LPUSH") store.lpush(cmd[1], cmd[2]);
-        else if (cmd[0] == "RPUSH") store.rpush(cmd[1], cmd[2]);
-        else if (cmd[0] == "LREM") store.lrem(cmd[1], stoi(cmd[2]), cmd[3]);
+        while (!dataBuffer.empty()) {
+            auto [cmd, consumed] = CommandParser::parse(dataBuffer);
+            if (consumed == 0 || cmd.empty()) break;
+            
+            dataBuffer.erase(0, consumed);
+            transform(cmd[0].begin(), cmd[0].end(), cmd[0].begin(), ::toupper);
+            
+            if (cmd[0] == "SET") store.set(cmd[1], cmd[2]);
+            else if (cmd[0] == "DEL") store.del(cmd[1]);
+            else if (cmd[0] == "LPUSH") store.lpush(cmd[1], cmd[2]);
+            else if (cmd[0] == "RPUSH") store.rpush(cmd[1], cmd[2]);
+            else if (cmd[0] == "LREM") store.lrem(cmd[1], stoi(cmd[2]), cmd[3]);
+        }
     }
 }
 

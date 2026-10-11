@@ -2,13 +2,10 @@
 #include "Store.h"
 #include "Replicator.h"
 #include<thread>
+#include<memory>
 using namespace std;
 
 int main(int argc,char* argv[]){
-    // Store store;
-    // RedisServer server(6379,store);
-    // server.start();
-    // return 0;
     int port = 6379;
     bool isMaster = true;
     int masterPort =-1;
@@ -24,13 +21,15 @@ int main(int argc,char* argv[]){
     Store store;
     RedisServer server(port,store,isMaster);
 
+    unique_ptr<Replicator> replicator;
 
     if(!isMaster){
-        Replicator*replicator = new Replicator(masterPort,store);
+        replicator = make_unique<Replicator>(masterPort,store);
         replicator->connectToMaster();
         replicator->sendHandshake();
-        thread t([replicator](){
-            replicator->listenForCommands();
+        Replicator* repPtr = replicator.get();
+        thread t([repPtr](){
+            repPtr->listenForCommands();
         });
         t.detach();
     }
