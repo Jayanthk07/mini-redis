@@ -164,20 +164,20 @@ Throughput scales sharply from 1→10 concurrent clients (single-connection requ
 
 **Payload handling**: verified with a 1024-byte payload (`-d 1024`) after fixing the fixed-size read buffer and moving to length-prefixed RESP parsing — see Known Limitations.
 
-**Bottleneck**: one shared_mutex per `Store` operation. A future optimization would use a single-threaded event loop (epoll) like real Redis — eliminating locking overhead entirely.
+**Bottleneck**: While `std::shared_mutex` allows concurrent reads, write operations (`SET`, `DEL`) still require exclusive write locks. Under heavy concurrent write loads, mutex contention on the single `Store` instance becomes the primary bottleneck rather than CPU or network capacity.
 
 ---
 ## Known Limitations
 
-- **No streaming/partial-read support**: `ClientHandler` assumes one `recv()` call contains exactly one complete RESP command. Large payloads or commands split across multiple TCP reads aren't reassembled — the server responds with a protocol error rather than corrupting state. Proper fix requires a persistent per-connection buffer that accumulates bytes until a full command is parseable.
-- **No command pipelining**: follows from the above — multiple commands sent back-to-back without waiting for individual replies aren't currently supported.
-- **Type-mismatch errors are shallow**: `WRONGTYPE` is detected via a length-comparison workaround in `ClientHandler` rather than a clean type check surfaced from the `Store` layer.
+- **Type-mismatch errors are shallow**: `WRONGTYPE` is detected via a length-comparison workaround in `ClientHandler` rather than a clean type check surfaced directly from the `Store` layer.
+- **No data persistence**: In-memory only; restarts reset the store (no RDB snapshotting or AOF log).
+- **Single-master without automated failover**: Replicas are read-only. If the master node goes down, manual reconfiguration is required (would require a consensus protocol like Raft or Redis Sentinel for automated leader election).
 
 ---
 ## Design Tradeoffs
 
-**One thread per client vs event loop:**
-Chose threads for simplicity. Real Redis uses a single-threaded event loop (`epoll`) which eliminates locking overhead and handles thousands of concurrent connections efficiently. Thread-per-client works fine at small scale but doesn't scale to 10k+ connections.
+**Migrating from Thread-per-client to epoll Event Loop:**
+Started with a thread-per-client model for simplicity. However, thread-per-client incurs ~8MB stack memory overhead per connection and severe context-switching costs under high concurrency. Migrated to a non-blocking Linux `epoll` event loop in edge-triggered mode (`EPOLLET`), allowing a single thread to multiplex thousands of concurrent connections with negligible memory footprint.
 
 **`std::mutex` vs `std::shared_mutex`:**
 Used `std::shared_mutex` for read/write lock separation — `GET`, `EXISTS`, `LRANGE`, `LLEN` take shared locks (multiple concurrent readers), while `SET`, `DEL`, `LPUSH`, `RPUSH`, `LREM` take exclusive locks. This improves read-heavy workload performance significantly compared to a plain `std::mutex`.
@@ -212,6 +212,7 @@ No persistence. All data is lost on restart. A production system would use RDB s
 | Memory leak on key overwrite | `Store::set` allocated a new `DataType*` without freeing the previous value at that key | Replaced raw `new`/`delete` with `std::unique_ptr<DataType>` — assignment operator auto-frees old value |
 | `DEL` always returned `1` even if key didn't exist | `Store::del` returned `void`, `ClientHandler` hardcoded `:1` | Changed `del()` to return `bool`; response now reflects actual deletion |
 | Server crash on non-numeric arguments (e.g. `SET key val EX abc`) | `stoi()` throws `std::invalid_argument` on non-numeric input, uncaught | Added `safeStoi()` wrapper; returns `-ERR value is not an integer or out of range` instead of crashing |
+| Protocol errors on fragmented TCP packets | Assumed a single `recv()` call contained exactly one complete RESP command | Added persistent per-connection buffers (`clientBuffers[fd]`) to accumulate incoming stream chunks until a full command is parsed |
 ---
 
 ## What I Learned
@@ -223,6 +224,6 @@ No persistence. All data is lost on restart. A production system would use RDB s
 - Why `shared_mutex` matters for read-heavy workloads
 - RAII ownership with `std::unique_ptr` — why smart pointers eliminate entire classes of memory bugs
 - How master-replica replication works and the CAP theorem tradeoffs it involves
-- Why real Redis uses a single-threaded event loop instead of threads
+- How to implement an event-driven server using Linux `epoll` in edge-triggered mode (`EPOLLET`)
 - Why RESP's explicit length-prefixing exists — a naive parser that scans for `*`/`$` markers breaks the moment binary payload data collides with those bytes; length-prefixing avoids ambiguity entirely
 - Defensive input validation — never trust user-provided data to be the right type
